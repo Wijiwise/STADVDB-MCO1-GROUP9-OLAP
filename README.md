@@ -33,7 +33,7 @@ JOIN Stop s     ON s.stop_rdt_id    = w.stop_rdt_id
 | Event clock time | `COALESCE(w.departure_time, w.arrival_time, TIMESTAMP(t.service_date))` |
 | Year / Quarter / Month / Day / Hour | `YEAR/QUARTER/MONTH/DATE/HOUR` of event time |
 | Day name / day number | `DAYNAME(event_time)`, `WEEKDAY(event_time)+1` (1 = Monday) |
-| Peak hour flag | Weekday **and** hour in `07–09` or `16–18` (rush-hour definition, adjustable in `app.py` as `PEAK_EXPR`) |
+| Peak hour flag | Weekday **and** hour in `07–09` or `16–18` (rush-hour definition, adjustable in `STADVDB-MCO1-Group9-OLAP.py` as `PEAK_EXPR`) |
 
 **Metric mapping:**
 
@@ -127,7 +127,7 @@ cmd.exe example:
 set DUTCHRAIL_DB_PASSWORD=your_password_here
 ```
 
-> The connection module (`db.py`) uses a `mysql-connector-python` connection pool (size 5, session reset enabled) and exposes `test_connection()`, `run_query()`, and `reset_pool()`.
+> The connection module (`db.py`) uses a `mysql-connector-python` connection pool (size 20, session reset enabled) and exposes `test_connection()`, `run_query()`, and `reset_pool()`.
 >
 > **Note:** `STADVDB-MCO1-GROUP9-ETL.py` reads the same `DB_PASSWORD` variable — set it before running the ETL as well. The password is intentionally not hard-coded anywhere.
 
@@ -141,29 +141,53 @@ Set the password for your shell session, then launch Streamlit through the venv'
 
 ```powershell
 $env:DUTCHRAIL_DB_PASSWORD = "your_password_here"
-.\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe -m streamlit run STADVDB-MCO1-Group9-OLAP.py
 ```
 
 **cmd.exe:**
 
 ```cmd
 set DUTCHRAIL_DB_PASSWORD=your_password_here
-.\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe -m streamlit run STADVDB-MCO1-Group9-OLAP.py
 ```
 
-> If you activated the venv beforehand (`Activate.ps1` / `activate.bat`), plain `streamlit run app.py` also works. If you see `'streamlit' is not recognized`, the venv is not on your PATH — use the full-path form above. Remember: `$env:` variables are PowerShell syntax; in cmd.exe use `set VAR=value` instead.
+> If you activated the venv beforehand (`Activate.ps1` / `activate.bat`), plain `streamlit run STADVDB-MCO1-Group9-OLAP.py` also works. If you see `'streamlit' is not recognized`, the venv is not on your PATH — use the full-path form above. Remember: `$env:` variables are PowerShell syntax; in cmd.exe use `set VAR=value` instead.
 
 Streamlit prints a local URL (default `http://localhost:8501`). Open it in a browser. Use the sidebar's **Test database connection** button to confirm connectivity — it prints the MySQL server version.
 
 > **First load can take a while:** the warehouse holds ~21M rows per fact table while MySQL's `innodb_buffer_pool_size` may still be at the 128 MB default. See Troubleshooting for the buffer-pool recommendation.
 
+### Execution model (parallel queries + fragments)
+
+When any sidebar filter changes, the app fires **all five analytical queries concurrently** (KPIs + 4 reports, via a 5-worker thread pool against the 20-connection MySQL pool), so a filter change costs roughly the slowest single query (~35–40 s cold) rather than the sum of all five. Each report is a Streamlit **fragment**: its local widgets (time grain, service hierarchy level, Top-N slider, heatmap metric) rerun **only that report's query**, leaving the other four untouched. Results are memoized for 5 minutes (`st.cache_data`), so back-and-forth filter toggling is served from memory.
+
+### Testing
+
+The acceptance suite `STADVDB-MCO1-Group9-Test.py` runs against the live warehouse:
+
+```powershell
+$env:DUTCHRAIL_DB_PASSWORD = "your_password_here"
+.\.venv\Scripts\python.exe STADVDB-MCO1-Group9-Test.py
+```
+
+| Test | What it verifies |
+|---|---|
+| T1 Connection | MySQL reachable through the `db.py` pool |
+| T2 Schema | `Warehouse` / `Location` / `Train` / `Stop` exist with all required columns |
+| T3 Row counts | Table-size estimates above minimum thresholds |
+| T4 Query checks | All 5 analytical queries (KPIs, trend, cancellations, ranking, heatmap) execute on a June 2019 slice; expected columns and sane value ranges; per-query timings |
+| T5 Parameterization | Bound values containing quotes/injection literals are treated as data, never SQL |
+
+Output is PASS/FAIL per test with timings; exit code 0 = all passed, 1 = failures. Typical full-suite runtime is a few minutes (dominated by the five warehouse aggregations).
+
 ### File map
 
 | File | Role |
 |---|---|
-| `app.py` | Streamlit UI: sidebar filters, KPI cards, 4 OLAP reports, drill-down state machine, parameterized SQL builders |
-| `db.py` | Secure MySQL connection pool + query helpers (env-var configured) |
+| `STADVDB-MCO1-Group9-OLAP.py` | Streamlit UI: sidebar filters, KPI cards, 4 OLAP reports (each an `@st.fragment`), parallel query prefetch, drill-down state machine, parameterized SQL builders |
+| `db.py` | Secure MySQL connection pool (size 20) + query helpers (env-var configured) |
 | `STADVDB-MCO1-GROUP9-ETL.py` | ETL that builds `railway_source` + `railway_dw` (run this first) |
+| `STADVDB-MCO1-Group9-Test.py` | Acceptance test suite against the live warehouse (see Testing) |
 | `requirements.txt` | Dependency bounds |
 | `README.md` | This document |
 
@@ -220,7 +244,7 @@ The KPI header, trend chart, cancellation chart, ranking, and heatmap all share 
 - All user selections are sent as **parameterized values** (`%s` placeholders via `mysql.connector`); dimension expressions are selected from a hardcoded whitelist (`TIME_EXPR`, `DIM_EXPR`) — no user text is interpolated into SQL structure.
 - Grain-level drill predicates are built only from typed values (ints, ISO dates) parsed from chart click `customdata`.
 - Credentials come exclusively from environment variables; nothing is hard-coded in source.
-- The peak-hour flag and event-time fallback are defined once in `app.py` (`PEAK_EXPR`, `EVENT_TIME`) so the business rules are easy to adjust.
+- The peak-hour flag and event-time fallback are defined once in `STADVDB-MCO1-Group9-OLAP.py` (`PEAK_EXPR`, `EVENT_TIME`) so the business rules are easy to adjust.
 
 ---
 
@@ -232,9 +256,9 @@ The KPI header, trend chart, cancellation chart, ranking, and heatmap all share 
 | `Table 'railway_dw.Warehouse' doesn't exist` | Run the ETL first: `python STADVDB-MCO1-GROUP9-ETL.py` (loads `data/services-*.csv` into `railway_source` then builds `railway_dw`). Or set `DUTCHRAIL_DB_NAME` if your warehouse uses another schema. |
 | Empty charts with "No … data for the current slice" | Widen the date range, clear multiselects, lower the delay threshold, or reset drill-downs. |
 | Permission denied for user | Grant privileges: `GRANT SELECT ON railway_dw.* TO 'user'@'localhost';` |
-| `'streamlit' is not recognized` | The venv is not on PATH — run `.\.venv\Scripts\python.exe -m streamlit run app.py`, or activate the venv first. |
+| `'streamlit' is not recognized` | The venv is not on PATH — run `.\.venv\Scripts\python.exe -m streamlit run STADVDB-MCO1-Group9-OLAP.py`, or activate the venv first. |
 | Queries take minutes / first load very slow | The warehouse is ~4.2 GB but `innodb_buffer_pool_size` defaults to 128 MB. In `my.ini` (e.g. `C:\ProgramData\MySQL\MySQL Server 9.3\my.ini`) set `innodb_buffer_pool_size=4G` under `[mysqld]` and restart the MySQL service. |
-| Port in use (8501) | `.\.venv\Scripts\python.exe -m streamlit run app.py --server.port 8502` |
+| Port in use (8501) | `.\.venv\Scripts\python.exe -m streamlit run STADVDB-MCO1-Group9-OLAP.py --server.port 8502` |
 | Virtual environment not activating | Skip activation entirely and use the full-path commands above, or run `Set-ExecutionPolicy -Scope Process RemoteSigned` if script execution is blocked. |
 
 ### Expected schema (reference — created by the ETL)
@@ -296,7 +320,7 @@ STADVDB-MCO1-GROUP9-ETL.py ──► railway_source.services ──► railway_d
 Browser (Streamlit UI)                                        │
         │  filter state / drill state                         │
         ▼                                                     │
-app.py  ── builds parameterized SQL (slice, dice, roll-up, drill-down)
+STADVDB-MCO1-Group9-OLAP.py ── builds parameterized SQL (slice, dice, roll-up, drill-down)
         │                                                     │
         ▼                                                     │
 db.py   ── mysql-connector pool (localhost:3306 / railway_dw) ◄─┘

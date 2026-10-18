@@ -1,4 +1,5 @@
 import datetime as dt
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 import plotly.express as px
@@ -363,13 +364,47 @@ def build_where(filters):
     return where, params
 
 
+@st.cache_data(ttl=300)
+def cached_query(sql, params):
+    return db.run_query(sql, params)
+
+
 def safe_query(sql, params):
     try:
-        return db.run_query(sql, params)
+        return cached_query(sql, tuple(params))
     except Exception as exc:
         st.error(f"Query failed: {exc}")
         st.code(sql, language="sql")
         return pd.DataFrame()
+
+
+def run_prefetch(where, params):
+    grain = st.session_state.get("time_grain", "Month")
+    dim_level = st.session_state.get("dim_level", "Company")
+    top_n = st.session_state.get("top_n", 15)
+    tasks = {
+        "kpis": lambda: fetch_kpis(where, params),
+        "trend": lambda: fetch_trend(grain, where, params),
+        "cancellations": lambda: fetch_cancellations(where, params),
+        "ranking": lambda: fetch_ranking(where, params, top_n),
+        "heatmap": lambda: fetch_heatmap(where, params),
+    }
+    results = {}
+    with st.spinner("Querying warehouse (all reports in parallel)..."):
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {name: executor.submit(fn) for name, fn in tasks.items()}
+            for name, future in futures.items():
+                try:
+                    results[name] = future.result()
+                except Exception as exc:
+                    st.error(f"{name} query failed: {exc}")
+                    results[name] = (pd.DataFrame(), "")
+    return results
+
+
+def take_prefetched(name):
+    store = st.session_state.get("_prefetched") or {}
+    return store.pop(name, None)
 
 
 def fetch_kpis(where, params):
@@ -533,7 +568,9 @@ def render_kpi_cards(kpis):
     c4.metric("Cancellation rate", f"{float(row['cancel_rate'] or 0):.2f}%")
 
 
+@st.fragment
 def render_trend(where, params):
+    consume_time_selection()
     grain = st.session_state["time_grain"]
     control1, control2 = st.columns([4, 1])
     with control1:
@@ -557,7 +594,11 @@ def render_trend(where, params):
         )
     st.caption(f"Drill path: {breadcrumb}  |  Grain: {grain}")
 
-    frame, sql = fetch_trend(grain, where, params)
+    cached = take_prefetched("trend")
+    if cached is not None:
+        frame, sql = cached
+    else:
+        frame, sql = fetch_trend(grain, where, params)
     if frame.empty:
         st.info("No trend data for the current slice.")
         return
@@ -616,7 +657,9 @@ def render_trend(where, params):
         st.code(sql, language="sql")
 
 
+@st.fragment
 def render_cancellations(where, params):
+    consume_dim_selection()
     level = st.session_state["dim_level"]
     control1, control2 = st.columns([4, 1])
     with control1:
@@ -640,7 +683,11 @@ def render_cancellations(where, params):
         )
     st.caption(f"Drill path: {breadcrumb}  |  Level: {level}")
 
-    frame, sql = fetch_cancellations(where, params)
+    cached = take_prefetched("cancellations")
+    if cached is not None:
+        frame, sql = cached
+    else:
+        frame, sql = fetch_cancellations(where, params)
     if frame.empty:
         st.info("No cancellation data for the current slice.")
         return
@@ -697,9 +744,19 @@ def render_cancellations(where, params):
         st.code(sql, language="sql")
 
 
+@st.fragment
 def render_ranking(where, params):
-    top_n = st.select_slider("Top N trains by delay severity", [10, 15, 25, 50, 100], value=15)
-    frame, sql = fetch_ranking(where, params, top_n)
+    top_n = st.select_slider(
+        "Top N trains by delay severity",
+        [10, 15, 25, 50, 100],
+        value=15,
+        key="top_n",
+    )
+    cached = take_prefetched("ranking")
+    if cached is not None:
+        frame, sql = cached
+    else:
+        frame, sql = fetch_ranking(where, params, top_n)
     if frame.empty:
         st.info("No trains match the current slice.")
         return
@@ -751,11 +808,13 @@ def render_ranking(where, params):
         st.code(sql, language="sql")
 
 
+@st.fragment
 def render_heatmap(where, params):
     metric_label = st.radio(
         "Heatmap metric",
         ["Avg arrival delay", "Avg departure delay", "Arrival cancelled %", "Departure cancelled %"],
         horizontal=True,
+        key="heat_metric",
     )
     metric_col = {
         "Avg arrival delay": "avg_arrival_delay",
@@ -763,7 +822,11 @@ def render_heatmap(where, params):
         "Arrival cancelled %": "arrival_cancel_rate",
         "Departure cancelled %": "departure_cancel_rate",
     }[metric_label]
-    frame, sql = fetch_heatmap(where, params)
+    cached = take_prefetched("heatmap")
+    if cached is not None:
+        frame, sql = cached
+    else:
+        frame, sql = fetch_heatmap(where, params)
     if frame.empty:
         st.info("No heatmap data for the current slice.")
         return
@@ -792,8 +855,6 @@ def render_heatmap(where, params):
 
 def main():
     init_state()
-    if consume_time_selection() or consume_dim_selection():
-        st.rerun()
 
     st.title("DutchRail Operations OLAP Dashboard")
     st.caption(
@@ -819,8 +880,11 @@ def main():
 
     where, params = build_where(filters)
 
-    kpis, _ = fetch_kpis(where, params)
-    render_kpi_cards(kpis)
+    results = run_prefetch(where, params)
+    st.session_state["_prefetched"] = results
+
+    kpis_frame, _ = results.get("kpis", (pd.DataFrame(), ""))
+    render_kpi_cards(kpis_frame)
     st.divider()
 
     st.subheader("1. Delay Trend Over Time")

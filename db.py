@@ -19,7 +19,7 @@ _POOL_LOCK = __import__("threading").Lock()
 def _pool_config():
     return {
         "pool_name": "dutchrail",
-        "pool_size": 5,
+        "pool_size": 20,
         "pool_reset_session": True,
         "host": DB_HOST,
         "port": DB_PORT,

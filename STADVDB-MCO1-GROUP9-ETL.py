@@ -10,7 +10,7 @@ import pymysql
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "123LgamCdlsu456!")
 SOURCE_DB = os.getenv("SOURCE_DB", "railway_source")
 WAREHOUSE_DB = os.getenv("WAREHOUSE_DB", "railway_dw")
 CSV_GLOB = os.getenv("CSV_GLOB", "data/services-*.csv")
