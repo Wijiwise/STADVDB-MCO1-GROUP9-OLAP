@@ -1,0 +1,20 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Large source data (2.7 GB, loaded by the ETL)
+data/
+
+# Temp artifacts
+.pip-tmp/
+*.log
+
+# Local secrets (never commit)
+.env
+.streamlit/secrets.toml
+
+# Editor / tool artifacts
+.Rhistory
