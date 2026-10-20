@@ -405,7 +405,7 @@ def run_prefetch(where, params):
     tasks = {
         "kpis": lambda: fetch_kpis(where, params),
         "trend": lambda: fetch_trend(grain, where, params),
-        "cancellations": lambda: fetch_cancellations(where, params),
+        "cancellations": lambda: fetch_cancellations(dim_level, where, params),
         "ranking": lambda: fetch_ranking(where, params, top_n),
         "heatmap": lambda: fetch_heatmap(where, params),
     }
@@ -474,8 +474,8 @@ ORDER BY period
     return safe_query(sql, params), sql
 
 
-def fetch_cancellations(where, params):
-    level_expr = DIM_EXPR[st.session_state["dim_level"]]
+def fetch_cancellations(dim_level, where, params):
+    level_expr = DIM_EXPR[dim_level]
     sql = f"""
 SELECT {level_expr} AS member,
        COUNT(*) AS stop_count,
@@ -711,7 +711,7 @@ def render_cancellations(where, params):
     if cached is not None:
         frame, sql = cached
     else:
-        frame, sql = fetch_cancellations(where, params)
+        frame, sql = fetch_cancellations(level, where, params)
     if frame.empty:
         st.info("No cancellation data for the current slice.")
         return
