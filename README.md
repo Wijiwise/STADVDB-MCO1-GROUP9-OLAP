@@ -157,9 +157,9 @@ Streamlit prints a local URL (default `http://localhost:8501`). Open it in a bro
 
 > **First load can take a while:** the warehouse holds ~21M rows per fact table while MySQL's `innodb_buffer_pool_size` may still be at the 128 MB default. See Troubleshooting for the buffer-pool recommendation.
 
-### Execution model (parallel queries + fragments)
+### Execution model (Apply button + parallel queries + fragments)
 
-When any sidebar filter changes, the app fires **all five analytical queries concurrently** (KPIs + 4 reports, via a 5-worker thread pool against the 20-connection MySQL pool), so a filter change costs roughly the slowest single query (~35–40 s cold) rather than the sum of all five. Each report is a Streamlit **fragment**: its local widgets (time grain, service hierarchy level, Top-N slider, heatmap metric) rerun **only that report's query**, leaving the other four untouched. Results are memoized for 5 minutes (`st.cache_data`), so back-and-forth filter toggling is served from memory.
+Sidebar filters are **drafts** — changing them shows an "Unapplied filter changes" hint but does **not** fire queries (this prevents Streamlit's rerun-preemption from cancelling in-flight queries mid-selection). Press **Apply filters** to commit the slice; the app then fires **all five analytical queries concurrently** (KPIs + 4 reports, via a 5-worker thread pool against the 20-connection MySQL pool), so one apply costs roughly the slowest single query (~35–40 s cold) rather than the sum of all five. Each report is a Streamlit **fragment**: its local widgets (time grain, service hierarchy level, Top-N slider, heatmap metric) rerun **only that report's query**, leaving the other four untouched. Results are memoized for 5 minutes (`st.cache_data`), so back-and-forth filter toggling is served from memory.
 
 ### Testing
 

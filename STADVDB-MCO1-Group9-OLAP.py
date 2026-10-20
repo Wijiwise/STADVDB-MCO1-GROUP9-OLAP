@@ -229,6 +229,7 @@ def render_sidebar(options, min_date, max_date):
         value=(min_date, max_date),
         min_value=min_date,
         max_value=max_date,
+        key="f_dates",
         help=(
             "Slices on Train.service_date. Charts aggregate each stop's event clock time "
             "(departure, else arrival, else service date)."
@@ -246,20 +247,25 @@ def render_sidebar(options, min_date, max_date):
     stations = st.sidebar.multiselect(
         "Stations",
         options["stations"],
+        key="f_stations",
         help="Slice by Location.station_name",
     )
     companies = st.sidebar.multiselect(
-        "Operating companies", options["companies"], help="Slice by Train.company"
+        "Operating companies", options["companies"], key="f_companies",
+        help="Slice by Train.company",
     )
     service_types = st.sidebar.multiselect(
-        "Service types", options["service_types"], help="Slice by Train.service_type"
+        "Service types", options["service_types"], key="f_service_types",
+        help="Slice by Train.service_type",
     )
     train_numbers = st.sidebar.multiselect(
-        "Train numbers", options["train_numbers"], help="Slice by Train.train_number"
+        "Train numbers", options["train_numbers"], key="f_trains",
+        help="Slice by Train.train_number",
     )
     peak_mode = st.sidebar.radio(
         "Hour type",
         ["All hours", "Peak only", "Off-peak only"],
+        key="f_peak",
         help=(
             "Derived flag: peak = weekday 07:00-09:59 and 16:00-18:59 "
             "on the stop's event clock time (departure, else arrival)."
@@ -270,19 +276,11 @@ def render_sidebar(options, min_date, max_date):
         min_value=0,
         max_value=120,
         value=0,
+        key="f_delay_min",
         help="Keeps stops where max(arrival, departure) delay >= threshold. 0 disables.",
     )
-    st.sidebar.divider()
-    st.sidebar.button("Reset drill-downs", on_click=reset_drills, use_container_width=True)
-    if st.sidebar.button("Test database connection", use_container_width=True):
-        try:
-            version = db.test_connection()
-            st.sidebar.success(f"Connected — MySQL {version}")
-        except Exception as exc:
-            db.reset_pool()
-            st.sidebar.error(f"Connection failed: {exc}")
 
-    return {
+    draft = {
         "start": start_date,
         "end": end_date,
         "stations": stations,
@@ -292,6 +290,28 @@ def render_sidebar(options, min_date, max_date):
         "peak_mode": peak_mode,
         "delay_min": delay_min,
     }
+
+    st.sidebar.divider()
+    if st.sidebar.button("Apply filters", type="primary", use_container_width=True):
+        st.session_state["applied_filters"] = draft
+
+    applied = st.session_state.get("applied_filters")
+    if applied is None:
+        st.session_state["applied_filters"] = draft
+        applied = draft
+    elif applied != draft:
+        st.sidebar.warning("Unapplied filter changes — press Apply filters.")
+
+    st.sidebar.button("Reset drill-downs", on_click=reset_drills, use_container_width=True)
+    if st.sidebar.button("Test database connection", use_container_width=True):
+        try:
+            version = db.test_connection()
+            st.sidebar.success(f"Connected — MySQL {version}")
+        except Exception as exc:
+            db.reset_pool()
+            st.sidebar.error(f"Connection failed: {exc}")
+
+    return applied
 
 
 def time_drill_sql(entries):
@@ -399,6 +419,10 @@ def run_prefetch(where, params):
                 except Exception as exc:
                     st.error(f"{name} query failed: {exc}")
                     results[name] = (pd.DataFrame(), "")
+        # Store before the spinner exits: st.* calls are Streamlit yield
+        # points where a pending rerun can abort this run, so persist the
+        # completed results before reaching that preemption point.
+        st.session_state["_prefetched"] = results
     return results
 
 
